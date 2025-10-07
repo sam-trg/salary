@@ -89,16 +89,46 @@
 </section>
 
 <!-- CDNs -->
-<script src="https://cdn.jsdelivr.net/npm/jszip@4.1.0/dist/jszip.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/weekday.js"></script>
-<!-- Load dayjs core first -->
-<script src="https://unpkg.com/dayjs@1.11.10/dayjs.min.js"></script>
+<!-- REPLACE any existing dayjs/plugin <script> tags with this loader.
+     Place this BEFORE your main script that uses `dayjs`. -->
+<script>
+(function(){
+  const v = '1.11.10';
+  const base = 'https://unpkg.com/dayjs@' + v + '/';
+  function load(src){ return new Promise((res,rej)=>{
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = false;
+    s.onload = res;
+    s.onerror = ()=>rej(new Error('failed to load '+src));
+    document.head.appendChild(s);
+  });}
 
-<!-- Then load plugins -->
-<script src="https://unpkg.com/dayjs@1.11.10/plugin/isoWeekday.js"></script>
-<script src="https://unpkg.com/dayjs@1.11.10/plugin/weekday.js"></script>
-<script src="https://unpkg.com/dayjs@1.11.10/plugin/customParseFormat.js"></script>
+  async function initDayjs(){
+    try{
+      await load(base + 'dayjs.min.js');
+      await load(base + 'plugin/weekday.js');
+      await load(base + 'plugin/isoWeekday.js');
+      await load(base + 'plugin/customParseFormat.js');
+
+      // extend using the UMD plugin exports
+      if(window.dayjs_plugin_weekday) dayjs.extend(window.dayjs_plugin_weekday);
+      if(window.dayjs_plugin_isoWeekday) dayjs.extend(window.dayjs_plugin_isoWeekday);
+      if(window.dayjs_plugin_customParseFormat) dayjs.extend(window.dayjs_plugin_customParseFormat);
+
+      // flag for debugging / other scripts to check
+      window.DAYJS_READY = true;
+      console.info('dayjs + plugins loaded');
+    } catch(err){
+      console.error('dayjs init failed', err);
+    }
+  }
+
+  initDayjs();
+})();
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/jszip@4.1.0/dist/jszip.min.js"></script>
 
 <!-- Extend plugins -->
 <script>
