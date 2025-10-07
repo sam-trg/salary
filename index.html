@@ -1,41 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Attendance → Payroll</title>
+<style>
+  :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; line-height: 1.4; }
+  body { margin: 0; padding: 16px; background: #f6f7fb; color: #111; }
+  header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; }
+  .card { background: #fff; border-radius: 8px; padding: 12px; margin-top: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  label { display: block; font-size: 13px; margin-bottom: 6px; }
+  input[type=file], input, select, button, textarea { font: inherit; padding: 8px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .col { flex: 1; min-width: 160px; }
+  button { background: #0b63ff; color: #fff; border: 0; padding: 9px 12px; border-radius: 8px; cursor: pointer; }
+  button:hover { background: #0053d9; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: left; }
+  tr:last-child td { border-bottom: 0; }
+  .small { font-size: 12px; color: #555; }
+  .flag { color: #b34747; font-weight: 600; }
+  .ok { color: #127a23; font-weight: 600; }
+  .switch { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .muted { color: #666; font-size: 13px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  @media(min-width:900px) { header { justify-content: space-between; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Attendance → Payroll</h1>
+    <div class="small muted">Drop a WhatsApp export .zip file. Assumes DD/MM/YY format & 11:00–20:00 shift.</div>
+  </div>
+  <div class="row">
+    <input id="zip" type="file" accept=".zip"/>
+    <button id="reset">Reset</button>
+  </div>
+</header>
+
+<section class="card" id="parseCard" style="display:none">
+  <label>Parsed staff (check to include in payroll)</label>
+  <div id="namesList" class="row"></div>
+
+  <div style="margin-top:12px" class="row">
+    <div class="col">
+      <label for="start">Start date</label>
+      <input id="start" type="date"/>
+    </div>
+    <div class="col">
+      <label for="end">End date</label>
+      <input id="end" type="date"/>
+    </div>
+    <div class="col">
+        <label>Working days in period</label>
+        <input id="workingDaysDisplay" disabled value="—" />
+    </div>
+  </div>
+
+  <div style="margin-top:12px">
+    <label>Per-employee monthly salary (INR)</label>
+    <div id="salaryInputs" class="row"></div>
+  </div>
+
+  <div style="margin-top:12px" class="row">
+    <div class="col">
+      <label for="paidLeaves">Paid leaves count (per employee)</label>
+      <input id="paidLeaves" type="number" min="0" value="0"/>
+    </div>
+    <div class="col">
+      <label for="sameSalary">Apply same salary to all?</label>
+      <select id="sameSalary">
+        <option value="yes">Yes</option>
+        <option value="no">No</option>
+      </select>
+    </div>
+    <div class="col">
+      <label for="rounding">Rounding (decimal places)</label>
+      <input id="rounding" value="2" type="number" min="0" max="4"/>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button id="calc">Calculate Payroll</button>
+    <button id="downloadAll" style="display:none">Download All as PDF</button>
+  </div>
+</section>
+
+<section class="card" id="resultsCard" style="display:none">
+  <h3>Payroll Results</h3>
+  <div id="summaryArea"></div>
+  <div id="perEmployee"></div>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+
 <script>
 document.addEventListener('DOMContentLoaded', () => {
     // --- STATE & CONFIG ---
-    const namesState = {}; // { name: { dates: { 'YYYY-MM-DD': [Date, ...] }, rawLines: [...] } }
+    let namesState = {}; // { name: { dates: { 'YYYY-MM-DD': [Date, ...] } } }
     let payrollResults = {}; // Global store for results to allow re-rendering
 
-    // --- DOM ELEMENTS ---
-    const zipInput = document.getElementById('zip');
-    const namesList = document.getElementById('namesList');
-    const salaryInputs = document.getElementById('salaryInputs');
-    const parseCard = document.getElementById('parseCard');
-    const resultsCard = document.getElementById('resultsCard');
-    const startDateInput = document.getElementById('start');
-    const endDateInput = document.getElementById('end');
-    const workingDaysDisplay = document.getElementById('workingDaysDisplay');
+    // --- DOM ELEMENT CACHE ---
+    const dom = {
+        zipInput: document.getElementById('zip'),
+        namesList: document.getElementById('namesList'),
+        salaryInputs: document.getElementById('salaryInputs'),
+        parseCard: document.getElementById('parseCard'),
+        resultsCard: document.getElementById('resultsCard'),
+        startDateInput: document.getElementById('start'),
+        endDateInput: document.getElementById('end'),
+        workingDaysDisplay: document.getElementById('workingDaysDisplay'),
+        paidLeavesInput: document.getElementById('paidLeaves'),
+        sameSalarySelect: document.getElementById('sameSalary'),
+        roundingInput: document.getElementById('rounding'),
+        perEmployeeDiv: document.getElementById('perEmployee'),
+        downloadBtn: document.getElementById('downloadAll'),
+    };
 
     // --- DATE HELPERS (Vanilla JS) ---
     const pad = n => String(n).padStart(2, '0');
-    
-    // ## FIX 1: Corrected this function to handle optional seconds ##
     const parseWhatsAppDate = (dd, mm, yyyy, timeStr, ampm) => {
         const parts = timeStr.split(':').map(Number);
         let hour = parts[0];
         const minute = parts[1] || 0;
-        const second = parts[2] || 0; // Added this line
+        const second = parts[2] || 0;
         const a = (ampm || 'AM').toString().toUpperCase();
         if (a === 'PM' && hour !== 12) hour += 12;
-        if (a === 'AM' && hour === 12) hour = 0; // Midnight case
-        return new Date(yyyy, mm - 1, dd, hour, minute, second); // Added seconds here
+        if (a === 'AM' && hour === 12) hour = 0;
+        return new Date(yyyy, mm - 1, dd, hour, minute, second);
     };
-
-    const isoFromDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const isoFromDate = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     const makeDateFromISOAndTime = (isoDate, timeStr) => new Date(`${isoDate}T${timeStr}`);
-    const formatDDMMYYYY = (isoDate) => {
-        const [y, m, d] = isoDate.split('-');
-        return `${d}/${m}/${y}`;
-    };
-    const formatTimeShort = (d) => d ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : '—';
+    const formatDDMMYYYY = isoDate => isoDate ? isoDate.split('-').reverse().join('/') : '';
+    const formatTimeShort = d => d ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : '—';
     const dateRange = (startISO, endISO) => {
         const out = [];
         let current = new Date(startISO + 'T00:00:00');
@@ -56,252 +156,146 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- CORE LOGIC ---
     const resetAll = () => {
-        Object.keys(namesState).forEach(k => delete namesState[k]);
+        namesState = {};
         payrollResults = {};
-        namesList.innerHTML = '';
-        salaryInputs.innerHTML = '';
-        document.getElementById('paidLeaves').value = 0;
-        parseCard.style.display = 'none';
-        resultsCard.style.display = 'none';
-        zipInput.value = '';
-        startDateInput.value = '';
-        endDateInput.value = '';
-        workingDaysDisplay.value = '—';
+        dom.namesList.innerHTML = '';
+        dom.salaryInputs.innerHTML = '';
+        dom.paidLeavesInput.value = 0;
+        dom.parseCard.style.display = 'none';
+        dom.resultsCard.style.display = 'none';
+        dom.zipInput.value = '';
+        dom.startDateInput.value = '';
+        dom.endDateInput.value = '';
+        dom.workingDaysDisplay.value = '—';
     };
 
     const parseWhatsAppTxt = (txt) => {
-        // ## FIX 2: Made the regex more flexible for timestamps and names ##
-        const lineRe = /\[(\d{1,2})\/(\d{1,2})\/(\d{2,4}),\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*([APap][Mm])\]\s*(.+?):\s*.*/;
-        
+        const lineRe = /\[(\d{1,2}\/\d{1,2}\/\d{2,4}),\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*([APap][Mm])\]\s*([^:]+):/
         txt.split(/\r?\n/).forEach(line => {
             const m = line.match(lineRe);
             if (!m) return;
-            const [, dd, mm, yyRaw, timeStr, ampm, nameRaw] = m;
+            const [, dateStr, timeStr, ampm, nameRaw] = m;
+            const dateParts = dateStr.split('/');
+            const dd = parseInt(dateParts[0], 10);
+            const mm = parseInt(dateParts[1], 10);
+            const yy = parseInt(dateParts[2], 10);
+            const yyyy = yy < 100 ? 2000 + yy : yy;
             const name = nameRaw.trim();
-            const year = parseInt(yyRaw, 10);
-            const yyyy = year < 100 ? 2000 + year : year; // Handles yy and yyyy
-            
-            const dObj = parseWhatsAppDate(parseInt(dd), parseInt(mm), yyyy, timeStr, ampm);
+            const dObj = parseWhatsAppDate(dd, mm, yyyy, timeStr, ampm);
+            if (isNaN(dObj)) return; // Skip invalid dates
             const key = isoFromDate(dObj);
-            
-            if (!namesState[name]) namesState[name] = { dates: {}, rawLines: [] };
+            if (!namesState[name]) namesState[name] = { dates: {} };
             if (!namesState[name].dates[key]) namesState[name].dates[key] = [];
-            
             namesState[name].dates[key].push(dObj);
-            namesState[name].rawLines.push({ iso: key, dt: dObj, raw: line });
         });
+        
+        if (Object.keys(namesState).length === 0) {
+            alert('Parsing failed. No valid attendance lines were found.\n\nPlease ensure the .txt file contains lines in the format:\n[DD/MM/YY, HH:MM AM/PM] Name: Message');
+            resetAll();
+            return;
+        }
         renderNames();
     };
-    
-    const calculatePayroll = () => {
-        const checkedNames = [...namesList.querySelectorAll('input:checked')].map(i => i.dataset.name);
-        if (checkedNames.length === 0) return alert('Please select at least one employee.');
 
-        const startISO = startDateInput.value;
-        const endISO = endDateInput.value;
-        if (!startISO || !endISO) return alert('Please provide both start and end dates.');
-        if (new Date(endISO) < new Date(startISO)) return alert('End date must be on or after the start date.');
-        
+    const calculatePayroll = () => {
+        const checkedNames = [...dom.namesList.querySelectorAll('input:checked')].map(i => i.dataset.name);
+        if (checkedNames.length === 0) return alert('Please select at least one employee.');
+        const startISO = dom.startDateInput.value;
+        const endISO = dom.endDateInput.value;
+        if (!startISO || !endISO || new Date(endISO) < new Date(startISO)) {
+            return alert('Please select a valid start and end date.');
+        }
         const workingDays = countWorkingDays(startISO, endISO);
         if (workingDays <= 0) return alert('No working days found in the selected date range.');
 
-        const paidLeavesCount = parseInt(document.getElementById('paidLeaves').value, 10) || 0;
-        const rounding = parseInt(document.getElementById('rounding').value, 10) || 2;
-        const useSameSalary = document.getElementById('sameSalary').value === 'yes';
-        const globalSalary = useSameSalary ? parseFloat(document.getElementById('globalSalary').value || '0') : 0;
-
+        const paidLeavesCount = parseInt(dom.paidLeavesInput.value, 10) || 0;
+        const useSameSalary = dom.sameSalarySelect.value === 'yes';
+        const globalSalary = useSameSalary ? parseFloat(document.getElementById('globalSalary')?.value || '0') : 0;
         const salaries = {};
         for (const name of checkedNames) {
             if (useSameSalary) {
                 salaries[name] = globalSalary;
             } else {
-                const el = salaryInputs.querySelector(`input[data-name="${name}"]`);
+                const el = dom.salaryInputs.querySelector(`input[data-name="${name}"]`);
                 salaries[name] = el ? parseFloat(el.value || '0') : 0;
             }
         }
-        
-        payrollResults = {}; // Clear previous results
+        payrollResults = {};
         for (const name of checkedNames) {
             const monthlySalary = salaries[name] || 0;
             const dailyRate = workingDays > 0 ? monthlySalary / workingDays : 0;
-            const hourlyRate = dailyRate / 9; // Assuming a 9-hour shift
-            
+            const hourlyRate = dailyRate / 9;
             const allDatesInRange = dateRange(startISO, endISO);
             const daysData = allDatesInRange.map(dateKey => {
                 const timestamps = (namesState[name]?.dates[dateKey] || []).sort((a, b) => a - b);
-                const t_in = timestamps.length > 0 ? timestamps[0] : null;
+                const t_in = timestamps[0] || null;
                 const t_out = timestamps.length > 1 ? timestamps[timestamps.length - 1] : null;
                 const workedMinutes = (t_in && t_out) ? Math.round((t_out - t_in) / 60000) : 0;
-                
-                return {
-                    date: dateKey,
-                    weekday: new Date(dateKey + 'T00:00:00').getDay(),
-                    timestamps,
-                    t_in,
-                    t_out,
-                    workedMinutes,
-                    isFlagged: timestamps.length === 1,
-                    isHalfDay: false,
-                    deductions: 0,
-                    overtimeMinutes: 0,
-                    manualOverride: false,
-                };
+                return { date: dateKey, weekday: new Date(dateKey + 'T00:00:00').getDay(), timestamps, t_in, t_out, workedMinutes, isFlagged: timestamps.length === 1, manualOverride: false };
             });
-
-            // Apply paid leaves to the earliest absences on working days
             const absences = daysData.filter(d => d.timestamps.length === 0 && d.weekday >= 1 && d.weekday <= 5);
             const paidLeaveDates = absences.slice(0, paidLeavesCount).map(d => d.date);
-
-            payrollResults[name] = {
-                name, monthlySalary, dailyRate, hourlyRate, workingDays,
-                days: daysData,
-                paidLeaveDates,
-                stats: {}, // To be populated by recalculateEmployeeTotals
-            };
-
+            payrollResults[name] = { name, monthlySalary, dailyRate, hourlyRate, workingDays, days: daysData, paidLeaveDates, stats: {} };
             recalculateEmployeeTotals(payrollResults[name]);
         }
-        
         renderResults();
-        resultsCard.style.display = 'block';
-        document.getElementById('downloadAll').style.display = 'inline-block';
+        dom.resultsCard.style.display = 'block';
+        dom.downloadBtn.style.display = 'inline-block';
     };
-    
-    const recalculateEmployeeTotals = (employeeResult) => {
+
+    const recalculateEmployeeTotals = (res) => {
         let fullDays = 0, halfDays = 0, flaggedCount = 0, totalDeductions = 0, totalOvertimeMinutes = 0;
-        const rounding = parseInt(document.getElementById('rounding').value, 10) || 2;
+        const rounding = parseInt(dom.roundingInput.value, 10) || 2;
         const round = val => Number(val.toFixed(rounding));
 
-        // First, apply paid leaves
-        employeeResult.paidLeaveDates.forEach(date => {
-            const day = employeeResult.days.find(d => d.date === date);
-            if (day) fullDays++;
-        });
-
-        employeeResult.days.forEach(d => {
-            // Reset per-day calculations unless it's a paid leave day
-            if (employeeResult.paidLeaveDates.includes(d.date)) return;
-            
-            d.isHalfDay = false;
-            d.deductions = 0;
-            d.overtimeMinutes = 0;
-            
-            if (d.timestamps.length === 0) return; // Unpaid absence
-            
-            if (d.manualOverride) {
-                fullDays++;
-                return;
-            }
-            
-            if (d.isFlagged) {
-                flaggedCount++;
-                return; // Flagged days don't count unless overridden
-            }
-
+        res.paidLeaveDates.forEach(() => fullDays++);
+        res.days.forEach(d => {
+            if (res.paidLeaveDates.includes(d.date)) return;
+            d.isHalfDay = false; d.deductions = 0; d.overtimeMinutes = 0;
+            if (d.timestamps.length === 0) return;
+            if (d.manualOverride) { fullDays++; return; }
+            if (d.isFlagged) { flaggedCount++; return; }
             const shiftStart = makeDateFromISOAndTime(d.date, '11:00:00');
             const graceLimit = makeDateFromISOAndTime(d.date, '11:45:00');
             const halfDayThreshold = makeDateFromISOAndTime(d.date, '14:00:00');
             const earlyLeaveThreshold = makeDateFromISOAndTime(d.date, '19:30:00');
             const shiftEnd = makeDateFromISOAndTime(d.date, '20:00:00');
-
-            if (d.t_in >= halfDayThreshold || d.workedMinutes < 4 * 60) {
-                d.isHalfDay = true;
-            } else if (d.t_in > graceLimit) {
-                const lateMins = Math.round((d.t_in - shiftStart) / 60000);
-                d.deductions += Math.ceil(lateMins / 60) * employeeResult.hourlyRate;
-            }
-
-            if (d.t_out < earlyLeaveThreshold) {
-                const earlyMins = Math.round((earlyLeaveThreshold - d.t_out) / 60000);
-                d.deductions += Math.ceil(earlyMins / 60) * employeeResult.hourlyRate;
-            }
-
-            if (d.t_out > shiftEnd) {
-                d.overtimeMinutes += Math.round((d.t_out - shiftEnd) / 60000);
-            }
-            
-            // Sunday work is all overtime
-            if (d.weekday === 0) {
-                d.overtimeMinutes += d.workedMinutes;
-            }
-            
-            if (d.isHalfDay) {
-                halfDays++;
-            } else {
-                fullDays++;
-            }
+            if (d.t_in >= halfDayThreshold || d.workedMinutes < 4 * 60) { d.isHalfDay = true; } 
+            else if (d.t_in > graceLimit) { d.deductions += Math.ceil(Math.round((d.t_in - shiftStart) / 60000) / 60) * res.hourlyRate; }
+            if (d.t_out < earlyLeaveThreshold) { d.deductions += Math.ceil(Math.round((earlyLeaveThreshold - d.t_out) / 60000) / 60) * res.hourlyRate; }
+            if (d.t_out > shiftEnd) { d.overtimeMinutes += Math.round((d.t_out - shiftEnd) / 60000); }
+            if (d.weekday === 0) { d.overtimeMinutes += d.workedMinutes; }
+            if (d.isHalfDay) { halfDays++; } else { fullDays++; }
             totalDeductions += d.deductions;
             totalOvertimeMinutes += d.overtimeMinutes;
         });
-        
-        const basePay = (fullDays * employeeResult.dailyRate) + (halfDays * employeeResult.dailyRate * 0.5);
-        const overtimePay = (totalOvertimeMinutes / 60) * employeeResult.hourlyRate;
-        const totalSalary = Math.max(0, basePay + overtimePay - totalDeductions);
-        
-        employeeResult.stats = {
-            totalFullDays: fullDays,
-            totalHalfDays: halfDays,
-            flaggedCount,
-            totalDeductions: round(totalDeductions),
-            totalOvertimeHours: round(totalOvertimeMinutes / 60),
-            basePay: round(basePay),
-            overtimePay: round(overtimePay),
-            totalSalary: round(totalSalary),
-        };
+        const basePay = (fullDays * res.dailyRate) + (halfDays * res.dailyRate * 0.5);
+        const overtimePay = (totalOvertimeMinutes / 60) * res.hourlyRate;
+        res.stats = { totalFullDays: fullDays, totalHalfDays: halfDays, flaggedCount, totalDeductions: round(totalDeductions), totalOvertimeHours: round(totalOvertimeMinutes / 60), basePay: round(basePay), overtimePay: round(overtimePay), totalSalary: round(Math.max(0, basePay + overtimePay - totalDeductions)) };
     };
 
     // --- UI RENDERING ---
     const renderNames = () => {
-        namesList.innerHTML = '';
-        Object.keys(namesState).sort().forEach(name => {
+        dom.namesList.innerHTML = Object.keys(namesState).sort().map(name => {
             const daysCount = Object.keys(namesState[name].dates).length;
-            const div = document.createElement('div');
-            div.className = 'col';
-            div.innerHTML = `
-                <label class="switch" style="background:#f7f8fc; padding:8px; border-radius:6px;">
-                  <input type="checkbox" data-name="${name}" checked />
-                  <strong style="flex:1">${name}</strong>
-                  <span class="small muted">${daysCount} days</span>
-                </label>`;
-            namesList.appendChild(div);
-        });
+            return `<div class="col"><label class="switch" style="background:#f7f8fc; padding:8px; border-radius:6px;"><input type="checkbox" data-name="${name}" checked /><strong style="flex:1">${name}</strong><span class="small muted">${daysCount} days</span></label></div>`;
+        }).join('');
         rebuildSalaryInputs();
     };
-
     const rebuildSalaryInputs = () => {
-        salaryInputs.innerHTML = '';
-        const checkedNames = [...namesList.querySelectorAll('input:checked')].map(i => i.dataset.name);
-        const useSameSalary = document.getElementById('sameSalary').value === 'yes';
-
+        const checkedNames = [...dom.namesList.querySelectorAll('input:checked')].map(i => i.dataset.name);
+        const useSameSalary = dom.sameSalarySelect.value === 'yes';
+        let html = '';
         if (useSameSalary) {
-            if (checkedNames.length > 0) {
-                const el = document.createElement('div');
-                el.className = 'col';
-                el.innerHTML = `<label for="globalSalary">Monthly salary for all selected</label><input id="globalSalary" type="number" min="0" value="20000"/>`;
-                salaryInputs.appendChild(el);
-            }
+            if (checkedNames.length > 0) html = `<div class="col"><label for="globalSalary">Monthly salary for all</label><input id="globalSalary" type="number" min="0" value="20000"/></div>`;
         } else {
-            checkedNames.forEach(name => {
-                const el = document.createElement('div');
-                el.className = 'col';
-                el.innerHTML = `<label>${name}'s salary</label><input data-name="${name}" type="number" min="0" value="20000"/>`;
-                salaryInputs.appendChild(el);
-            });
+            html = checkedNames.map(name => `<div class="col"><label>${name}'s salary</label><input data-name="${name}" type="number" min="0" value="20000"/></div>`).join('');
         }
+        dom.salaryInputs.innerHTML = html;
     };
-
     const renderResults = () => {
-        const startISO = startDateInput.value;
-        const endISO = endDateInput.value;
-        document.getElementById('summaryArea').innerHTML = `<div class="muted small">Period: ${formatDDMMYYYY(startISO)} → ${formatDDMMYYYY(endISO)}</div>`;
-        const perEmployeeDiv = document.getElementById('perEmployee');
-        perEmployeeDiv.innerHTML = '';
-
-        for (const name in payrollResults) {
-            const res = payrollResults[name];
-            const card = document.createElement('div');
-            card.className = 'card';
-            
+        document.getElementById('summaryArea').innerHTML = `<div class="muted small">Period: ${formatDDMMYYYY(dom.startDateInput.value)} → ${formatDDMMYYYY(dom.endDateInput.value)}</div>`;
+        dom.perEmployeeDiv.innerHTML = Object.values(payrollResults).map(res => {
             const tableRows = res.days.map(d => {
                 const flags = [];
                 if (d.isFlagged && !d.manualOverride) flags.push(`<span class="flag">FLAG</span>`);
@@ -309,106 +303,65 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (d.deductions > 0 && !d.manualOverride) flags.push(`<span class="flag">LATE/EARLY</span>`);
                 if (d.overtimeMinutes > 0 && !d.manualOverride) flags.push(`<span class="ok">OT</span>`);
                 if (res.paidLeaveDates.includes(d.date)) flags.push(`<span class="ok">PAID LEAVE</span>`);
-                
-                return `
-                    <tr class="${(d.weekday === 0 || d.weekday === 6) ? 'muted' : ''}">
-                        <td>${formatDDMMYYYY(d.date)}</td>
-                        <td>${formatTimeShort(d.t_in)}</td>
-                        <td>${formatTimeShort(d.t_out)}</td>
-                        <td>${d.workedMinutes > 0 ? (d.workedMinutes / 60).toFixed(2) : '—'}</td>
-                        <td>${flags.join(' ') || '—'}</td>
-                        <td>${d.deductions > 0 && !d.manualOverride ? `₹${d.deductions.toFixed(2)}` : '—'}</td>
-                        <td>${d.overtimeMinutes > 0 && !d.manualOverride ? (d.overtimeMinutes / 60).toFixed(2) : '—'}</td>
-                        <td>
-                            ${d.timestamps.length > 0 ? `<label class="switch"><input type="checkbox" class="override" data-name="${res.name}" data-date="${d.date}" ${d.manualOverride ? 'checked' : ''}/> Override</label>` : ''}
-                        </td>
-                    </tr>`;
+                const overrideHTML = d.timestamps.length > 0 ? `<label class="switch"><input type="checkbox" class="override" data-name="${res.name}" data-date="${d.date}" ${d.manualOverride ? 'checked' : ''}/> Override</label>` : '';
+                return `<tr class="${(d.weekday === 0 || d.weekday === 6) ? 'muted' : ''}"><td>${formatDDMMYYYY(d.date)}</td><td>${formatTimeShort(d.t_in)}</td><td>${formatTimeShort(d.t_out)}</td><td>${d.workedMinutes > 0 ? (d.workedMinutes / 60).toFixed(2) : '—'}</td><td>${flags.join(' ') || '—'}</td><td>${(d.deductions > 0 && !d.manualOverride) ? `₹${d.deductions.toFixed(2)}` : '—'}</td><td>${(d.overtimeMinutes > 0 && !d.manualOverride) ? (d.overtimeMinutes / 60).toFixed(2) : '—'}</td><td>${overrideHTML}</td></tr>`;
             }).join('');
-            
-            card.innerHTML = `
-                <h4 style="margin:0;">${res.name} — ₹${res.monthlySalary}/month</h4>
-                <div class="small">Daily: ₹${res.dailyRate.toFixed(2)} · Hourly: ₹${res.hourlyRate.toFixed(2)} · Period Working Days: ${res.workingDays}</div>
-                <table>
-                    <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Hrs</th><th>Status</th><th>Deduct</th><th>OT (Hrs)</th><th>Action</th></tr></thead>
-                    <tbody>${tableRows}</tbody>
-                </table>
-                <div class="small" style="margin-top:8px;">
-                    Summary: <strong>${res.stats.totalFullDays}</strong> Full Days · <strong>${res.stats.totalHalfDays}</strong> Half Days · <strong>${res.stats.flaggedCount}</strong> Flagged · OT <strong>${res.stats.totalOvertimeHours}</strong> hrs · Deductions <strong>₹${res.stats.totalDeductions}</strong>
-                </div>
-                <div style="margin-top:8px; font-weight: 600;">
-                    Base Pay: ₹${res.stats.basePay} + OT Pay: ₹${res.stats.overtimePay} = Total Payable: ₹${res.stats.totalSalary}
-                </div>`;
-            perEmployeeDiv.appendChild(card);
-        }
+            return `<div class="card"><h4 style="margin:0;">${res.name} — ₹${res.monthlySalary}/month</h4><div class="small">Daily: ₹${res.dailyRate.toFixed(2)} · Hourly: ₹${res.hourlyRate.toFixed(2)} · Period Working Days: ${res.workingDays}</div><table><thead><tr><th>Date</th><th>In</th><th>Out</th><th>Hrs</th><th>Status</th><th>Deduct</th><th>OT (Hrs)</th><th>Action</th></tr></thead><tbody>${tableRows}</tbody></table><div class="small" style="margin-top:8px;">Summary: <strong>${res.stats.totalFullDays}</strong> Full Days · <strong>${res.stats.totalHalfDays}</strong> Half Days · <strong>${res.stats.flaggedCount}</strong> Flagged · OT <strong>${res.stats.totalOvertimeHours}</strong> hrs · Deductions <strong>₹${res.stats.totalDeductions}</strong></div><div style="margin-top:8px; font-weight: 600;">Base Pay: ₹${res.stats.basePay} + OT Pay: ₹${res.stats.overtimePay} = Total Payable: ₹${res.stats.totalSalary}</div></div>`;
+        }).join('');
     };
-    
+
     // --- EVENT LISTENERS ---
-    zipInput.addEventListener('change', async (e) => {
+    dom.zipInput.addEventListener('change', async (e) => {
         resetAll();
         const file = e.target.files[0];
         if (!file) return;
-
         try {
             const zip = await JSZip.loadAsync(await file.arrayBuffer());
-            const txtFile = Object.values(zip.files).find(f => f.name.toLowerCase().endsWith('.txt'));
+            const txtFile = Object.values(zip.files).find(f => !f.dir && f.name.toLowerCase().endsWith('.txt'));
             if (!txtFile) return alert('No .txt file found in the ZIP archive.');
-            
             const textContent = await txtFile.async('string');
             parseWhatsAppTxt(textContent);
-            parseCard.style.display = 'block';
+            dom.parseCard.style.display = 'block';
         } catch (err) {
-            console.error('ZIP parsing error:', err);
+            console.error('File processing error:', err);
             alert('Failed to read ZIP file. ' + err.message);
         }
     });
 
     document.getElementById('reset').addEventListener('click', resetAll);
     document.getElementById('calc').addEventListener('click', calculatePayroll);
-    document.getElementById('sameSalary').addEventListener('change', rebuildSalaryInputs);
-    namesList.addEventListener('change', rebuildSalaryInputs);
-    
-    [startDateInput, endDateInput].forEach(input => {
-        input.addEventListener('change', () => {
-            workingDaysDisplay.value = countWorkingDays(startDateInput.value, endDateInput.value) || '—';
-        });
-    });
-
-    document.getElementById('perEmployee').addEventListener('change', e => {
+    dom.sameSalarySelect.addEventListener('change', rebuildSalaryInputs);
+    dom.namesList.addEventListener('change', rebuildSalaryInputs);
+    [dom.startDateInput, dom.endDateInput].forEach(input => input.addEventListener('change', () => {
+        dom.workingDaysDisplay.value = countWorkingDays(dom.startDateInput.value, dom.endDateInput.value) || '—';
+    }));
+    dom.perEmployeeDiv.addEventListener('change', e => {
         if (e.target.classList.contains('override')) {
             const { name, date } = e.target.dataset;
-            const employeeResult = payrollResults[name];
-            if (employeeResult) {
-                const day = employeeResult.days.find(d => d.date === date);
+            const res = payrollResults[name];
+            if (res) {
+                const day = res.days.find(d => d.date === date);
                 if (day) {
                     day.manualOverride = e.target.checked;
-                    recalculateEmployeeTotals(employeeResult);
-                    renderResults(); // Re-render to update the UI
+                    recalculateEmployeeTotals(res);
+                    renderResults();
                 }
             }
         }
     });
-    
-    document.getElementById('downloadAll').addEventListener('click', async () => {
+    dom.downloadBtn.addEventListener('click', () => {
         const { jsPDF } = window.jspdf;
-        const cards = document.querySelectorAll('#perEmployee .card');
+        const cards = dom.perEmployeeDiv.querySelectorAll('.card');
         if (cards.length === 0) return;
-
         const doc = new jsPDF({ unit: 'mm', format: 'a4' });
         let yPosition = 15;
-        
-        cards.forEach((card, index) => {
-            const textContent = card.innerText.replace(/Override/g, ''); // Clean up action text
+        cards.forEach((card) => {
+            const textContent = card.innerText.replace(/Override/g, '');
             const lines = doc.splitTextToSize(textContent, 180);
-            
-            if (yPosition + (lines.length * 5) > 280) { // Check if it fits on the page
-                doc.addPage();
-                yPosition = 15;
-            }
-            
+            if (yPosition + (lines.length * 5) > 280) { doc.addPage(); yPosition = 15; }
             doc.text(lines, 15, yPosition);
-            yPosition += (lines.length * 5) + 10; // Add spacing
+            yPosition += (lines.length * 5) + 10;
         });
-        
         doc.save('payslips.pdf');
     });
 
@@ -416,3 +369,5 @@ document.addEventListener('DOMContentLoaded', () => {
     resetAll();
 });
 </script>
+</body>
+</html>
