@@ -92,7 +92,11 @@
 <script src="https://cdn.jsdelivr.net/npm/jszip@4.1.0/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/weekday.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/isoWeekday.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/isoWeekday.js"></script>
+<script>
+  dayjs.extend(window.dayjs_plugin_isoWeekday);
+</script>
+
 <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/customParseFormat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script>
