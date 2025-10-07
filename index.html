@@ -92,15 +92,24 @@
 <script src="https://cdn.jsdelivr.net/npm/jszip@4.1.0/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/weekday.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/isoWeekday.js"></script>
+<!-- Load dayjs core first -->
+<script src="https://unpkg.com/dayjs@1.11.10/dayjs.min.js"></script>
+
+<!-- Then load plugins -->
+<script src="https://unpkg.com/dayjs@1.11.10/plugin/isoWeekday.js"></script>
+<script src="https://unpkg.com/dayjs@1.11.10/plugin/weekday.js"></script>
+<script src="https://unpkg.com/dayjs@1.11.10/plugin/customParseFormat.js"></script>
+
+<!-- Extend plugins -->
 <script>
   dayjs.extend(window.dayjs_plugin_isoWeekday);
+  dayjs.extend(window.dayjs_plugin_weekday);
+  dayjs.extend(window.dayjs_plugin_customParseFormat);
 </script>
 
-<script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/customParseFormat.js"></script>
+<!-- Other libraries -->
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-<script>
-dayjs.extend(dayjs_plugin_weekday); dayjs.extend(dayjs_plugin_isoWeekday); dayjs.extend(dayjs_plugin_customParseFormat);
+
 const zipInput = document.getElementById('zip');
 const namesList = document.getElementById('namesList');
 const parseCard = document.getElementById('parseCard');
